@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "recon-plus"
+version = "0.1.0"
+description = "A TUI dashboard for managing AI coding agent sessions (Copilot CLI, Claude Code, Codex)"
+requires-python = ">=3.10"
+dependencies = [
+    "textual>=0.85",
+    "pyyaml>=6.0",
+]
+
+[project.scripts]
+recon-plus = "recon_plus.__main__:main"
