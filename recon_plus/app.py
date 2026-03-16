@@ -10,6 +10,7 @@ from . import config, launcher
 from .preferences import AGENTS, default_agent, set_default_agent
 from .session import Session, delete_session, discover_sessions, purge_empty_sessions
 from .status import Status, determine_status
+from .widgets.new_session_dialog import NewSessionDialog
 from .widgets.table_view import SessionDeleteRequest, SessionSelected, SessionTable
 from .widgets.tamagotchi_view import TamagotchiView
 
@@ -276,9 +277,27 @@ class ReconCopilotApp(App):
                 self.query_one(SessionTable).query_one("DataTable").focus()
 
     def action_new_session(self) -> None:
-        agent = default_agent()
-        launcher.launch_session(agent=agent)
-        self.notify(f"New {agent} session")
+        # Get cwd from selected row
+        preselect = ""
+        if self._view_mode == "table":
+            sess = self.query_one(SessionTable).get_selected_session()
+            if sess:
+                preselect = sess.cwd
+        elif self._view_mode == "tamagotchi":
+            sess = self.query_one(TamagotchiView).get_selected_session()
+            if sess:
+                preselect = sess.cwd
+
+        def _on_result(cwd: str | None) -> None:
+            if cwd:
+                agent = default_agent()
+                launcher.launch_session(cwd=cwd, agent=agent)
+                self.notify(f"New {agent} session in {cwd}")
+
+        self.push_screen(
+            NewSessionDialog(self._all_sessions, preselect_cwd=preselect),
+            _on_result,
+        )
 
     def action_resume_selected(self) -> None:
         if self._searching:
