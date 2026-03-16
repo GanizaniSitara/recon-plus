@@ -73,9 +73,7 @@ class SessionTable(Vertical):
 
         for i, sess in enumerate(sessions, 1):
             status = determine_status(sess)
-            # Plain text indicators that work everywhere
-            indicator = {"Input": "(!)", "Working": ">>>", "Idle": " - ", "New": " + ", "Done": "   "}.get(status, "   ")
-            status_cell = f"{indicator} {status}"
+            status_cell = f"\u25cf {status}"
 
             model = _short_model(sess.model)
             if not model or model == "-":
