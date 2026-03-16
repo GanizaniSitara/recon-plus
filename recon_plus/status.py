@@ -118,37 +118,22 @@ def _get_claude_live_pids() -> dict[int, dict]:
     return result
 
 
+def _encode_cwd(cwd: str) -> str:
+    """Encode a cwd path the same way Claude Code encodes project dirs."""
+    return cwd.replace("\\", "-").replace("/", "-").replace(":", "-").lower()
+
+
 def _claude_session_is_live(sess: Session) -> bool:
     """Check if a Claude session has a running process.
-    Only match by direct session ID — CWD matching is too broad."""
+    Only matches by direct session ID to avoid false positives
+    from multiple sessions sharing a project directory."""
     raw_id = sess.session_id.split(":", 1)[-1]
     live = _get_claude_live_pids()
 
-    # Direct match: PID file's sessionId == our JSONL filename
     for pid, data in live.items():
         if data.get("sessionId") == raw_id:
             return True
 
-    # Indirect match: PID file's sessionId has a JSONL in the same
-    # project directory as ours AND that directory has only one PID active
-    # (avoids broad dirs like C--git matching everything)
-    projects_dir = Path.home() / ".claude" / "projects"
-    for pid, data in live.items():
-        their_sid = data.get("sessionId", "")
-        if not their_sid:
-            continue
-        for project_dir in projects_dir.iterdir():
-            if not project_dir.is_dir():
-                continue
-            our_jsonl = project_dir / f"{raw_id}.jsonl"
-            their_jsonl = project_dir / f"{their_sid}.jsonl"
-            # Both JSONLs must exist in the SAME directory
-            if our_jsonl.is_file() and their_jsonl.is_file():
-                # Only match if it's a specific project dir (not a broad one like C--git)
-                # Check: does the project dir have few JSONL files? (specific project)
-                jsonl_count = sum(1 for _ in project_dir.glob("*.jsonl"))
-                if jsonl_count <= 3:
-                    return True
     return False
 
 
