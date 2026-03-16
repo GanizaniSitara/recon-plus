@@ -188,6 +188,7 @@ class ReconCopilotApp(App):
 
     def get_system_commands(self, screen) -> SystemCommand:
         yield from super().get_system_commands(screen)
+        yield SystemCommand("Quit", "Exit recon-plus", self.action_quit)
         current = default_agent()
         for agent in AGENTS:
             marker = " *" if agent == current else ""
