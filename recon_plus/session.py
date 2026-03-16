@@ -31,6 +31,7 @@ class Session:
     last_event_type: str = ""
     last_event_time: str = ""
     has_shutdown: bool = False
+    pending_tool: bool = False  # tool requested but not yet executed (awaiting approval)
     events_mtime: float = 0.0
     prev_events_mtime: float = 0.0  # mtime from previous refresh cycle
     session_size: int = 0  # total size of session directory in bytes
@@ -194,6 +195,7 @@ def _parse_copilot_events(
         sess.total_output_tokens = prev.total_output_tokens
         sess.total_premium_requests = prev.total_premium_requests
         sess.has_shutdown = prev.has_shutdown
+        sess.pending_tool = prev.pending_tool
         sess.last_event_type = prev.last_event_type
         sess.last_event_time = prev.last_event_time
         sess._last_file_size = prev._last_file_size
@@ -205,6 +207,7 @@ def _parse_copilot_events(
         sess.total_output_tokens = 0
         sess.total_premium_requests = 0
         sess.has_shutdown = False
+        sess.pending_tool = False
         seek_pos = 0
     else:
         seek_pos = sess._last_file_size
@@ -232,13 +235,20 @@ def _parse_copilot_events(
                 if ev_type == "session.model_change":
                     sess.model = data.get("newModel", sess.model)
                 elif ev_type == "tool.execution_complete":
+                    sess.pending_tool = False
                     if m := data.get("model"):
                         sess.model = m
+                elif ev_type == "tool.execution_start":
+                    sess.pending_tool = False  # tool is running
                 elif ev_type == "assistant.message":
                     if tok := data.get("outputTokens"):
                         sess.total_output_tokens += tok
+                    # Check if this message has tool requests (awaiting approval)
+                    if data.get("toolRequests"):
+                        sess.pending_tool = True
                 elif ev_type == "session.shutdown":
                     sess.has_shutdown = True
+                    sess.pending_tool = False
                     sess.total_premium_requests = data.get(
                         "totalPremiumRequests", sess.total_premium_requests
                     )
@@ -349,6 +359,7 @@ def _parse_claude_jsonl(
         sess.summary = prev.summary
         sess.last_event_type = prev.last_event_type
         sess.last_event_time = prev.last_event_time
+        sess.pending_tool = prev.pending_tool
         sess.created_at = prev.created_at
         sess.updated_at = prev.updated_at
         sess._last_file_size = prev._last_file_size
@@ -392,6 +403,22 @@ def _parse_claude_jsonl(
                     usage = msg.get("usage", {})
                     if tok := usage.get("output_tokens"):
                         sess.total_output_tokens += tok
+                    # Check for tool_use blocks (pending approval)
+                    content = msg.get("content", [])
+                    if isinstance(content, list):
+                        has_tool_use = any(
+                            isinstance(b, dict) and b.get("type") == "tool_use"
+                            for b in content
+                        )
+                        sess.pending_tool = has_tool_use
+                    else:
+                        sess.pending_tool = False
+
+                elif ev_type == "progress":
+                    sess.pending_tool = False  # tool is executing
+
+                elif ev_type == "user":
+                    sess.pending_tool = False  # user responded
 
                 # Pick up git branch
                 if not sess.branch:

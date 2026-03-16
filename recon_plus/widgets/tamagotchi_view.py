@@ -170,6 +170,8 @@ def _get_sprite_and_palette(status: str, frame: int) -> tuple[Sprite, Palette]:
         return SPRITE_EGG, PAL_EGG
     if status == Status.WORKING:
         return SPRITES_WORKING[frame % 3], PAL_WORKING
+    if status == Status.INPUT:
+        return SPRITES_INPUT[frame % 3], PAL_INPUT
     if status == Status.IDLE:
         return SPRITE_IDLE, PAL_IDLE
     return SPRITE_DONE, PAL_DONE
@@ -208,7 +210,7 @@ CARD_WIDTH = 16
 def _render_card(sess: Session, tick: int, selected: bool = False) -> list[Text]:
     status = determine_status(sess)
     offset = sum(sess.session_id.encode()) % 7
-    frame = ((tick + offset)) % 3 if status == Status.WORKING else 0
+    frame = ((tick + offset)) % 3 if status in (Status.WORKING, Status.INPUT) else 0
 
     sprite, palette = _get_sprite_and_palette(status, frame)
     sprite_lines = _render_sprite_lines(sprite, palette)

@@ -20,12 +20,14 @@ from .session import Session
 class Status:
     NEW = "New"
     WORKING = "Working"
+    INPUT = "Input"
     IDLE = "Idle"
     DONE = "Done"
 
     COLORS = {
         "New": "dodger_blue1",
         "Working": "green",
+        "Input": "red",
         "Idle": "bright_black",
         "Done": "dark_gray",
     }
@@ -33,6 +35,7 @@ class Status:
     DOTS = {
         "New": "[dodger_blue1]\u25cf[/]",
         "Working": "[green]\u25cf[/]",
+        "Input": "[red]\u25cf[/]",
         "Idle": "[bright_black]\u25cf[/]",
         "Done": "[dark_gray]\u25cf[/]",
     }
@@ -115,20 +118,21 @@ def _copilot_status(sess: Session) -> str:
     if _file_changed(sess):
         return Status.WORKING
 
-    # File didn't change — check how stale it is
+    # File didn't change — check pending tool approval
+    if sess.pending_tool:
+        return Status.INPUT
+
     last = sess.last_event_type
     if last in ("assistant.turn_end",):
         return Status.IDLE
     if last in ("user.message", "assistant.turn_start", "tool.execution_start",
                 "assistant.message", "subagent.started"):
-        # Mid-turn but file stopped changing — could be long model think
         age = time.time() - sess.events_mtime
         if age < 600:
             return Status.WORKING
         return Status.DONE
     if last == "abort":
         return Status.DONE
-    # Fallback
     age = time.time() - sess.events_mtime
     if age < 3600:
         return Status.IDLE
@@ -141,20 +145,22 @@ def _claude_status(sess: Session) -> str:
     if _file_changed(sess):
         return Status.WORKING
 
-    # File didn't change — check process
+    # File didn't change — check pending tool and process
     is_live = _claude_session_is_live(sess)
+
+    if sess.pending_tool and is_live:
+        return Status.INPUT
 
     last = sess.last_event_type
     if last in ("assistant", "progress", "tool_use"):
         if is_live:
-            return Status.IDLE  # finished responding, waiting for user
+            return Status.IDLE
         age = time.time() - sess.events_mtime
         if age < 600:
-            return Status.WORKING  # first refresh, no prev_mtime yet
+            return Status.WORKING
         return Status.DONE
 
     if last == "user":
-        # User sent message — if process is alive, model is thinking
         if is_live:
             return Status.WORKING
         return Status.DONE
