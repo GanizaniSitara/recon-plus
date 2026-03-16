@@ -160,12 +160,15 @@ class ReconCopilotApp(App):
 
         sort_mode = SORT_MODES[self._sort_idx]
         if sort_mode == "directory":
-            sessions.sort(key=lambda s: (s.cwd.lower(), s.updated_at or ""))
+            sessions.sort(key=lambda s: (s.cwd.lower(), s.session_id))
         elif sort_mode == "status":
             order = {"Input": 0, "Working": 1, "Idle": 2, "New": 3, "Done": 4}
-            sessions.sort(key=lambda s: (order.get(determine_status(s), 9), s.updated_at or ""))
+            sessions.sort(key=lambda s: (order.get(determine_status(s), 9), s.session_id))
         elif sort_mode == "model":
-            sessions.sort(key=lambda s: (s.model or "zzz", s.updated_at or ""))
+            sessions.sort(key=lambda s: (s.model or "zzz", s.session_id))
+        else:
+            # Default time sort — stable by session_id within same updated_at
+            sessions.sort(key=lambda s: (s.updated_at or "", s.session_id), reverse=True)
 
         return sessions
 

@@ -196,12 +196,17 @@ def _claude_status(sess: Session) -> str:
 
     is_live = _claude_session_is_live(sess)
 
-    if sess.pending_tool and is_live:
+    # Only show Input if file has been stale for >10s (not just one refresh cycle)
+    # This avoids false Input when tools auto-execute
+    if sess.pending_tool and is_live and _is_stale(sess, 10):
         return Status.INPUT
 
     last = sess.last_event_type
     if last in ("assistant", "progress", "tool_use"):
         if is_live:
+            # Recently active = Working (tool executing), otherwise Idle
+            if not _is_stale(sess, 30):
+                return Status.WORKING
             return Status.IDLE
         if not _is_stale(sess):
             return Status.WORKING
