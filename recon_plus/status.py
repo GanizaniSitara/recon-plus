@@ -118,7 +118,16 @@ def _copilot_status(sess: Session) -> str:
             return Status.WORKING
         return Status.DONE
 
-    if last in ("assistant.turn_end", "user.message"):
+    # user.message followed by silence = model is thinking
+    if last == "user.message":
+        age = time.time() - sess.events_mtime
+        if age < 300:  # 5 min — model could be reasoning
+            return Status.WORKING
+        if age < 3600:
+            return Status.IDLE
+        return Status.DONE
+
+    if last == "assistant.turn_end":
         age = time.time() - sess.events_mtime
         if age < 3600:
             return Status.IDLE
@@ -157,11 +166,13 @@ def _claude_status(sess: Session) -> str:
             return Status.IDLE
         return Status.DONE
 
-    # User sent a message — session is idle waiting for next input
+    # User sent a message — model is likely thinking
     if last == "user":
+        age = time.time() - sess.events_mtime
+        if age < 300:
+            return Status.WORKING
         if _claude_session_is_live(sess):
             return Status.IDLE
-        age = time.time() - sess.events_mtime
         if age < 3600:
             return Status.IDLE
         return Status.DONE
