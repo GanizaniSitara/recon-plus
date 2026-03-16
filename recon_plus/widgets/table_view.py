@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from rich.text import Text
+
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Vertical
@@ -71,8 +73,10 @@ class SessionTable(Vertical):
 
         for i, sess in enumerate(sessions, 1):
             status = determine_status(sess)
-            dot = Status.DOTS.get(status, "")
-            status_cell = f"{dot} {status}"
+            color = Status.COLORS.get(status, "white")
+            status_cell = Text()
+            status_cell.append("\u25cf ", style=color)
+            status_cell.append(status, style=color)
 
             model = _short_model(sess.model)
             if not model or model == "-":
