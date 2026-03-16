@@ -32,6 +32,7 @@ class Session:
     last_event_time: str = ""
     has_shutdown: bool = False
     pending_tool: bool = False  # tool requested but not yet executed (awaiting approval)
+    _pending_count: int = 0    # number of outstanding tool requests
     events_mtime: float = 0.0
     prev_events_mtime: float = 0.0  # mtime from previous refresh cycle
     session_size: int = 0  # total size of session directory in bytes
@@ -235,17 +236,25 @@ def _parse_copilot_events(
                 if ev_type == "session.model_change":
                     sess.model = data.get("newModel", sess.model)
                 elif ev_type == "tool.execution_complete":
-                    sess.pending_tool = False
+                    sess.pending_tool = max(0, sess._pending_count - 1) > 0
+                    sess._pending_count = max(0, sess._pending_count - 1)
                     if m := data.get("model"):
                         sess.model = m
                 elif ev_type == "tool.execution_start":
-                    sess.pending_tool = False  # tool is running
+                    pass  # fires before approval, doesn't mean tool is done
                 elif ev_type == "assistant.message":
                     if tok := data.get("outputTokens"):
                         sess.total_output_tokens += tok
-                    # Check if this message has tool requests (awaiting approval)
-                    if data.get("toolRequests"):
+                    # Track how many tools are requested
+                    reqs = data.get("toolRequests", [])
+                    if reqs:
+                        sess._pending_count = len(reqs)
                         sess.pending_tool = True
+                    else:
+                        sess.pending_tool = False
+                elif ev_type in ("assistant.turn_end", "user.message"):
+                    sess.pending_tool = False
+                    sess._pending_count = 0
                 elif ev_type == "session.shutdown":
                     sess.has_shutdown = True
                     sess.pending_tool = False

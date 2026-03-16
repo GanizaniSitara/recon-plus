@@ -299,7 +299,7 @@ class TamagotchiView(Static, can_focus=True):
             key = sess.short_cwd or "unknown"
             rooms[key].append(sess)
 
-        order = {Status.WORKING: 0, Status.IDLE: 1, Status.NEW: 2, Status.DONE: 3}
+        order = {Status.INPUT: 0, Status.WORKING: 1, Status.IDLE: 2, Status.NEW: 3, Status.DONE: 4}
 
         def room_priority(name: str) -> int:
             return min(order.get(determine_status(s), 9) for s in rooms[name])
@@ -308,8 +308,14 @@ class TamagotchiView(Static, can_focus=True):
 
         for room_name in sorted(rooms, key=room_priority):
             sessions = rooms[room_name]
+            has_input = any(determine_status(s) == Status.INPUT for s in sessions)
             has_working = any(determine_status(s) == Status.WORKING for s in sessions)
-            border_style = "bold green" if has_working else "dim"
+            if has_input:
+                border_style = "bold red"
+            elif has_working:
+                border_style = "bold green"
+            else:
+                border_style = "dim"
 
             header = f" {room_name} ({len(sessions)}) "
             output.append(f"--- {header} ", style=border_style)
