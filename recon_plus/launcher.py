@@ -226,13 +226,14 @@ def _find_window_for_pid(target_pid: int) -> int | None:
 
 
 def _start_in_new_window(cmd: list[str], cwd: str) -> None:
+    import threading, time as _time
+
     if _has_wt():
         subprocess.Popen(
             ["wt", "nt", "-d", cwd] + cmd,
             creationflags=_detached(),
         )
     else:
-        # Use shell=True so cmd.exe handles the quoting of the title properly
         cmd_str = 'start "recon-plus" ' + " ".join(cmd)
         subprocess.Popen(
             cmd_str,
@@ -240,6 +241,41 @@ def _start_in_new_window(cmd: list[str], cwd: str) -> None:
             shell=True,
             creationflags=_detached(),
         )
+
+    # Focus the new window after it appears
+    def _focus_new():
+        for _ in range(10):
+            _time.sleep(0.5)
+            hwnd = _find_window_by_title("recon-plus")
+            if hwnd:
+                user32.ShowWindow(hwnd, 9)
+                user32.SetForegroundWindow(hwnd)
+                return
+
+    if sys.platform == "win32":
+        threading.Thread(target=_focus_new, daemon=True).start()
+
+
+def _find_window_by_title(title: str) -> int | None:
+    """Find a visible window by exact title."""
+    if sys.platform != "win32":
+        return None
+
+    WNDENUMPROC = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
+    result = [None]
+    buf = ctypes.create_unicode_buffer(256)
+
+    def callback(hwnd, lparam):
+        if not user32.IsWindowVisible(hwnd):
+            return True
+        user32.GetWindowTextW(hwnd, buf, 256)
+        if buf.value == title:
+            result[0] = hwnd
+            return False
+        return True
+
+    user32.EnumWindows(WNDENUMPROC(callback), 0)
+    return result[0]
 
 
 def _detached() -> int:
