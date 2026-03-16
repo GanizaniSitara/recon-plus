@@ -164,7 +164,9 @@ def determine_status(sess: Session) -> str:
 
 def _copilot_status(sess: Session) -> str:
     if not sess.last_event_type:
-        return Status.NEW
+        if _copilot_session_is_live(sess):
+            return Status.NEW
+        return Status.DONE  # empty stale session
     if sess.has_shutdown:
         return Status.DONE
 
