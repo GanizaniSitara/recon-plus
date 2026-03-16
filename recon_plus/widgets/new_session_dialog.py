@@ -35,12 +35,13 @@ class NewSessionDialog(ModalScreen[str | None]):
         width: 70;
         height: auto;
         max-height: 20;
-        border: round $accent;
+        border: solid $accent;
         background: $surface;
         padding: 1 2;
     }
     #dir-input {
         margin: 1 0;
+        border: solid $accent;
     }
     #recent-list {
         height: auto;
