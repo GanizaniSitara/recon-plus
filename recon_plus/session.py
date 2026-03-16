@@ -32,6 +32,7 @@ class Session:
     last_event_time: str = ""
     has_shutdown: bool = False
     events_mtime: float = 0.0
+    prev_events_mtime: float = 0.0  # mtime from previous refresh cycle
     session_size: int = 0  # total size of session directory in bytes
     # Cached for incremental reads
     _last_file_size: int = 0
@@ -184,6 +185,7 @@ def _parse_copilot_events(
     except OSError:
         return
 
+    sess.prev_events_mtime = prev.events_mtime if prev else 0.0
     sess.events_mtime = stat.st_mtime
     file_size = stat.st_size
 
@@ -336,6 +338,7 @@ def _parse_claude_jsonl(
     except OSError:
         return
 
+    sess.prev_events_mtime = prev.events_mtime if prev else 0.0
     sess.events_mtime = stat.st_mtime
     file_size = stat.st_size
 

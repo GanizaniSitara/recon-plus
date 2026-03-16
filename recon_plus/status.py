@@ -1,4 +1,12 @@
-"""Determine session status from filesystem signals."""
+"""Determine session status from filesystem signals.
+
+The core logic is deterministic:
+  - File changed since last refresh (2s ago) → Working
+  - File didn't change + process alive → Idle
+  - File didn't change + no process → Done
+  - No events at all → New
+  - Explicit shutdown event → Done
+"""
 
 from __future__ import annotations
 
@@ -30,14 +38,22 @@ class Status:
     }
 
 
-# Cache for Claude PID check — refreshed periodically
+def _file_changed(sess: Session) -> bool:
+    """Did the events file change since our last refresh?"""
+    return (
+        sess.events_mtime > 0
+        and sess.prev_events_mtime > 0
+        and sess.events_mtime != sess.prev_events_mtime
+    )
+
+
+# ── Claude live process detection ────────────────────────────────────
+
 _claude_live_pids: dict[int, dict] | None = None
 _claude_live_pids_ts: float = 0
 
 
 def _get_claude_live_pids() -> dict[int, dict]:
-    """Read ~/.claude/sessions/*.json to get currently live session PIDs.
-    Cached for 5 seconds."""
     global _claude_live_pids, _claude_live_pids_ts
     now = time.time()
     if _claude_live_pids is not None and now - _claude_live_pids_ts < 5:
@@ -61,19 +77,15 @@ def _get_claude_live_pids() -> dict[int, dict]:
 
 
 def _claude_session_is_live(sess: Session) -> bool:
-    """Check if a Claude Code session has a running process."""
     raw_id = sess.session_id.split(":", 1)[-1]
     live = _get_claude_live_pids()
 
     for pid, data in live.items():
-        # Direct session ID match
         if data.get("sessionId") == raw_id:
             return True
-        # CWD match via encoded project path
         pid_cwd = data.get("cwd", "")
         if pid_cwd:
             encoded = pid_cwd.replace("\\", "-").replace("/", "-").replace(":", "-")
-            # Check if our JSONL lives in a project dir matching this cwd
             projects_dir = Path.home() / ".claude" / "projects"
             for project_dir in projects_dir.iterdir():
                 if not project_dir.is_dir():
@@ -85,8 +97,9 @@ def _claude_session_is_live(sess: Session) -> bool:
     return False
 
 
+# ── Status determination ─────────────────────────────────────────────
+
 def determine_status(sess: Session) -> str:
-    """Determine session status from filesystem/event signals."""
     if sess.provider == "claude":
         return _claude_status(sess)
     if sess.provider == "codex":
@@ -99,103 +112,69 @@ def _copilot_status(sess: Session) -> str:
         return Status.NEW
     if sess.has_shutdown:
         return Status.DONE
+    if _file_changed(sess):
+        return Status.WORKING
 
-    if sess.events_mtime > 0:
-        age = time.time() - sess.events_mtime
-        if age < 5:
-            return Status.WORKING
-
+    # File didn't change — check how stale it is
     last = sess.last_event_type
-    if last in (
-        "tool.execution_start",
-        "assistant.message",
-        "assistant.turn_start",
-        "subagent.started",
-        "session.compaction_start",
-    ):
+    if last in ("assistant.turn_end",):
+        return Status.IDLE
+    if last in ("user.message", "assistant.turn_start", "tool.execution_start",
+                "assistant.message", "subagent.started"):
+        # Mid-turn but file stopped changing — could be long model think
         age = time.time() - sess.events_mtime
-        if age < 120:
+        if age < 600:
             return Status.WORKING
         return Status.DONE
-
-    # user.message followed by silence = model is thinking
-    if last == "user.message":
-        age = time.time() - sess.events_mtime
-        if age < 300:  # 5 min — model could be reasoning
-            return Status.WORKING
-        if age < 3600:
-            return Status.IDLE
-        return Status.DONE
-
-    if last == "assistant.turn_end":
-        age = time.time() - sess.events_mtime
-        if age < 3600:
-            return Status.IDLE
-        return Status.DONE
-
     if last == "abort":
         return Status.DONE
-
-    if sess.events_mtime > 0:
-        age = time.time() - sess.events_mtime
-        if age < 3600:
-            return Status.IDLE
-
+    # Fallback
+    age = time.time() - sess.events_mtime
+    if age < 3600:
+        return Status.IDLE
     return Status.DONE
 
 
 def _claude_status(sess: Session) -> str:
     if not sess.last_event_type:
         return Status.NEW
+    if _file_changed(sess):
+        return Status.WORKING
 
-    # Recently modified = actively working
-    if sess.events_mtime > 0:
-        age = time.time() - sess.events_mtime
-        if age < 5:
-            return Status.WORKING
+    # File didn't change — check process
+    is_live = _claude_session_is_live(sess)
 
     last = sess.last_event_type
-
-    # Mid-turn events
     if last in ("assistant", "progress", "tool_use"):
+        if is_live:
+            return Status.IDLE  # finished responding, waiting for user
         age = time.time() - sess.events_mtime
-        if age < 120:
-            return Status.WORKING
-        # Stale but process might still be alive (waiting for user input)
-        if _claude_session_is_live(sess):
-            return Status.IDLE
+        if age < 600:
+            return Status.WORKING  # first refresh, no prev_mtime yet
         return Status.DONE
 
-    # User sent a message — model is likely thinking
     if last == "user":
-        age = time.time() - sess.events_mtime
-        if age < 300:
+        # User sent message — if process is alive, model is thinking
+        if is_live:
             return Status.WORKING
-        if _claude_session_is_live(sess):
-            return Status.IDLE
-        if age < 3600:
-            return Status.IDLE
         return Status.DONE
 
-    # Any other event type — check if process is alive
-    if _claude_session_is_live(sess):
+    if is_live:
         return Status.IDLE
 
-    if sess.events_mtime > 0:
-        age = time.time() - sess.events_mtime
-        if age < 3600:
-            return Status.IDLE
-
+    age = time.time() - sess.events_mtime
+    if age < 3600:
+        return Status.IDLE
     return Status.DONE
 
 
 def _codex_status(sess: Session) -> str:
     if sess.has_shutdown:
         return Status.DONE
+    if _file_changed(sess):
+        return Status.WORKING
     if sess.events_mtime > 0:
         age = time.time() - sess.events_mtime
-        if age < 10:
-            return Status.WORKING
         if age < 3600:
             return Status.IDLE
     return Status.DONE
