@@ -1,11 +1,10 @@
 """Determine session status from filesystem signals.
 
-The core logic is deterministic:
-  - File changed since last refresh (2s ago) → Working
-  - File didn't change + process alive → Idle
-  - File didn't change + no process → Done
-  - No events at all → New
-  - Explicit shutdown event → Done
+The core logic:
+  - File changed since last refresh → Working
+  - pending_tool + session alive → Input (needs user approval)
+  - Process alive + not working → Idle
+  - No process + stale → Done
 """
 
 from __future__ import annotations
@@ -15,6 +14,7 @@ import time
 from pathlib import Path
 
 from .session import Session
+from . import config
 
 
 class Status:
@@ -48,6 +48,45 @@ def _file_changed(sess: Session) -> bool:
         and sess.prev_events_mtime > 0
         and sess.events_mtime != sess.prev_events_mtime
     )
+
+
+def _is_stale(sess: Session, max_age: float = 600) -> bool:
+    """Is the events file older than max_age seconds?"""
+    if sess.events_mtime <= 0:
+        return True
+    return (time.time() - sess.events_mtime) > max_age
+
+
+# ── Copilot workspace.yaml liveness check ────────────────────────────
+
+_copilot_ws_mtimes: dict[str, float] = {}
+_copilot_ws_ts: float = 0
+
+
+def _copilot_session_is_live(sess: Session) -> bool:
+    """Check if a Copilot session's workspace.yaml was recently modified.
+    Copilot updates workspace.yaml more frequently than events.jsonl."""
+    global _copilot_ws_mtimes, _copilot_ws_ts
+    now = time.time()
+
+    # Refresh cache every 5s
+    if now - _copilot_ws_ts > 5:
+        _copilot_ws_mtimes.clear()
+        base = config.copilot_home() / "session-state"
+        if base.is_dir():
+            for ws in base.glob("*/workspace.yaml"):
+                try:
+                    _copilot_ws_mtimes[ws.parent.name] = ws.stat().st_mtime
+                except OSError:
+                    pass
+        _copilot_ws_ts = now
+
+    raw_id = sess.session_id.split(":", 1)[-1]
+    ws_mtime = _copilot_ws_mtimes.get(raw_id, 0)
+    if ws_mtime <= 0:
+        return False
+    # If workspace.yaml was modified in last 10 minutes, session is likely alive
+    return (now - ws_mtime) < 600
 
 
 # ── Claude live process detection ────────────────────────────────────
@@ -115,26 +154,36 @@ def _copilot_status(sess: Session) -> str:
         return Status.NEW
     if sess.has_shutdown:
         return Status.DONE
+
+    is_live = _copilot_session_is_live(sess)
+
     if _file_changed(sess):
         return Status.WORKING
 
-    # File didn't change — check pending tool approval
-    if sess.pending_tool:
+    # Pending tool approval only matters if session is still alive
+    if sess.pending_tool and is_live:
         return Status.INPUT
 
     last = sess.last_event_type
     if last in ("assistant.turn_end",):
-        return Status.IDLE
+        if is_live:
+            return Status.IDLE
+        return Status.DONE
+
     if last in ("user.message", "assistant.turn_start", "tool.execution_start",
                 "assistant.message", "subagent.started"):
-        age = time.time() - sess.events_mtime
-        if age < 600:
+        if is_live:
+            return Status.WORKING
+        if not _is_stale(sess):
             return Status.WORKING
         return Status.DONE
+
     if last == "abort":
         return Status.DONE
-    age = time.time() - sess.events_mtime
-    if age < 3600:
+
+    if is_live:
+        return Status.IDLE
+    if not _is_stale(sess, 3600):
         return Status.IDLE
     return Status.DONE
 
@@ -145,7 +194,6 @@ def _claude_status(sess: Session) -> str:
     if _file_changed(sess):
         return Status.WORKING
 
-    # File didn't change — check pending tool and process
     is_live = _claude_session_is_live(sess)
 
     if sess.pending_tool and is_live:
@@ -155,8 +203,7 @@ def _claude_status(sess: Session) -> str:
     if last in ("assistant", "progress", "tool_use"):
         if is_live:
             return Status.IDLE
-        age = time.time() - sess.events_mtime
-        if age < 600:
+        if not _is_stale(sess):
             return Status.WORKING
         return Status.DONE
 
@@ -167,9 +214,7 @@ def _claude_status(sess: Session) -> str:
 
     if is_live:
         return Status.IDLE
-
-    age = time.time() - sess.events_mtime
-    if age < 3600:
+    if not _is_stale(sess, 3600):
         return Status.IDLE
     return Status.DONE
 
@@ -179,8 +224,6 @@ def _codex_status(sess: Session) -> str:
         return Status.DONE
     if _file_changed(sess):
         return Status.WORKING
-    if sess.events_mtime > 0:
-        age = time.time() - sess.events_mtime
-        if age < 3600:
-            return Status.IDLE
+    if sess.events_mtime > 0 and not _is_stale(sess, 3600):
+        return Status.IDLE
     return Status.DONE
