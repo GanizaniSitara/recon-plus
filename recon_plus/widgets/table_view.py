@@ -73,7 +73,10 @@ class SessionTable(Vertical):
 
         for i, sess in enumerate(sessions, 1):
             status = determine_status(sess)
-            status_cell = f"\u25cf {status}"
+            color = Status.COLORS.get(status, "white")
+            status_cell = Text()
+            status_cell.append("\u25cf ", style=color)
+            status_cell.append(status, style=color)
 
             model = _short_model(sess.model)
             if not model or model == "-":
