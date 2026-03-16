@@ -123,16 +123,85 @@ def _encode_cwd(cwd: str) -> str:
     return cwd.replace("\\", "-").replace("/", "-").replace(":", "-").lower()
 
 
+def _is_pid_alive(pid: int) -> bool:
+    """Check if a Windows process is still running."""
+    import sys
+    if sys.platform != "win32":
+        return False
+    import ctypes, ctypes.wintypes
+    kernel32 = ctypes.windll.kernel32
+    handle = kernel32.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
+    if not handle:
+        return False
+    exit_code = ctypes.wintypes.DWORD()
+    kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code))
+    kernel32.CloseHandle(handle)
+    return exit_code.value == 259  # STILL_ACTIVE
+
+
+# Cache: set of project dir names with live processes
+_active_project_dirs: set[str] | None = None
+_active_project_dirs_ts: float = 0
+
+
+def _get_active_project_dirs() -> dict[str, float]:
+    """Get project dir names -> process start time for dirs with live Claude processes."""
+    global _active_project_dirs, _active_project_dirs_ts
+    now = time.time()
+    if _active_project_dirs is not None and now - _active_project_dirs_ts < 5:
+        return _active_project_dirs
+
+    result = {}
+    live = _get_claude_live_pids()
+    sessions_dir = Path.home() / ".claude" / "sessions"
+    for pid, data in live.items():
+        if not _is_pid_alive(pid):
+            continue
+        pid_cwd = data.get("cwd", "")
+        started_at = data.get("startedAt", 0)
+        if started_at:
+            started_at = started_at / 1000.0  # ms to seconds
+        else:
+            # Use PID file mtime as fallback
+            pid_file = sessions_dir / f"{pid}.json"
+            try:
+                started_at = pid_file.stat().st_mtime
+            except OSError:
+                started_at = 0
+        if pid_cwd:
+            encoded = pid_cwd.replace("\\", "-").replace("/", "-").replace(":", "-").lower()
+            result[encoded] = started_at
+
+    _active_project_dirs = result
+    _active_project_dirs_ts = now
+    return result
+
+
 def _claude_session_is_live(sess: Session) -> bool:
-    """Check if a Claude session has a running process.
-    Only matches by direct session ID to avoid false positives
-    from multiple sessions sharing a project directory."""
+    """Check if a Claude session has a running process."""
     raw_id = sess.session_id.split(":", 1)[-1]
     live = _get_claude_live_pids()
 
+    # Direct session ID match
     for pid, data in live.items():
         if data.get("sessionId") == raw_id:
-            return True
+            return _is_pid_alive(pid)
+
+    # Indirect: session's JSONL is in a project dir with a live process
+    # Only match if the JSONL was modified AFTER the process started
+    if sess.events_mtime > 0:
+        projects_dir = Path.home() / ".claude" / "projects"
+        active_dirs = _get_active_project_dirs()
+        for project_dir in projects_dir.iterdir():
+            if not project_dir.is_dir():
+                continue
+            dir_name = project_dir.name.lower()
+            if dir_name in active_dirs:
+                jsonl = project_dir / f"{raw_id}.jsonl"
+                if jsonl.is_file():
+                    process_start = active_dirs[dir_name]
+                    if sess.events_mtime >= process_start:
+                        return True
 
     return False
 
