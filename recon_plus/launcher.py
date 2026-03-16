@@ -228,25 +228,25 @@ def _find_window_for_pid(target_pid: int) -> int | None:
 def _start_in_new_window(cmd: list[str], cwd: str) -> None:
     import threading, time as _time
 
-    if _has_wt():
-        subprocess.Popen(
-            ["wt", "nt", "-d", cwd] + cmd,
-            creationflags=_detached(),
-        )
-    else:
-        cmd_str = 'start "recon-plus" ' + " ".join(cmd)
-        subprocess.Popen(
-            cmd_str,
-            cwd=cwd,
-            shell=True,
-            creationflags=_detached(),
-        )
+    # Resolve the binary to its full path so it works in detached processes
+    binary = shutil.which(cmd[0])
+    if binary:
+        cmd = [binary] + cmd[1:]
+
+    # Use CREATE_NEW_CONSOLE to force a new cmd.exe window (not routed via default terminal)
+    subprocess.Popen(
+        cmd,
+        cwd=cwd,
+        creationflags=subprocess.CREATE_NEW_CONSOLE,
+    )
 
     # Focus the new window after it appears
+    agent_name = Path(cmd[0]).stem.lower()
+
     def _focus_new():
         for _ in range(10):
             _time.sleep(0.5)
-            hwnd = _find_window_by_title("recon-plus")
+            hwnd = _find_window_by_title_containing(agent_name)
             if hwnd:
                 user32.ShowWindow(hwnd, 9)
                 user32.SetForegroundWindow(hwnd)
@@ -256,8 +256,8 @@ def _start_in_new_window(cmd: list[str], cwd: str) -> None:
         threading.Thread(target=_focus_new, daemon=True).start()
 
 
-def _find_window_by_title(title: str) -> int | None:
-    """Find a visible window by exact title."""
+def _find_window_by_title_containing(substring: str) -> int | None:
+    """Find a visible window whose title contains the substring."""
     if sys.platform != "win32":
         return None
 
@@ -269,7 +269,7 @@ def _find_window_by_title(title: str) -> int | None:
         if not user32.IsWindowVisible(hwnd):
             return True
         user32.GetWindowTextW(hwnd, buf, 256)
-        if buf.value == title:
+        if substring in buf.value.lower():
             result[0] = hwnd
             return False
         return True
