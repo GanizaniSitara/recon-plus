@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from textual.app import App, ComposeResult, SystemCommand
 from textual.binding import Binding
 from textual.widgets import Footer, Header, Input
 
 from . import config, launcher
-from .preferences import AGENTS, default_agent, set_default_agent
+from .preferences import AGENTS, default_agent, next_agent, set_default_agent
 from .session import Session, delete_session, discover_sessions, purge_empty_sessions
 from .status import Status, determine_status
 from .widgets.new_session_dialog import NewSessionDialog
@@ -190,6 +192,16 @@ class ReconCopilotApp(App):
     def get_system_commands(self, screen) -> SystemCommand:
         yield from super().get_system_commands(screen)
         yield SystemCommand("Quit", "Exit recon-plus", self.action_quit)
+        yield SystemCommand(
+            "Rotate agent",
+            f"Switch to next agent (current: {default_agent()}). Cycles: copilot -> claude -> codex",
+            self._rotate_agent,
+        )
+        yield SystemCommand(
+            "Launch all three",
+            "Start copilot + claude + codex sessions in the selected directory",
+            self._launch_all_three,
+        )
         current = default_agent()
         for agent in AGENTS:
             marker = " *" if agent == current else ""
@@ -202,6 +214,23 @@ class ReconCopilotApp(App):
     def _set_agent(self, agent: str) -> None:
         set_default_agent(agent)
         self.notify(f"Default agent: {agent}")
+
+    def _rotate_agent(self) -> None:
+        new = next_agent()
+        self.notify(f"Agent rotated to: {new}")
+
+    def _launch_all_three(self) -> None:
+        cwd = self._get_selected_cwd()
+        for agent in AGENTS:
+            launcher.launch_session(cwd=cwd, agent=agent)
+        self.notify(f"Launched all 3 agents in {cwd}")
+
+    def _get_selected_cwd(self) -> str:
+        if self._view_mode == "table":
+            sess = self.query_one(SessionTable).get_selected_session()
+        else:
+            sess = self.query_one(TamagotchiView).get_selected_session()
+        return sess.cwd if sess and sess.cwd else str(Path.cwd())
 
     def action_toggle_view(self) -> None:
         try:
